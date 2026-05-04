@@ -18,9 +18,7 @@ RUN npm install
 COPY . .
 
 # Set the environment variables required for the build
-ENV PHANPY_DEFAULT_INSTANCE=hachyderm.io
-ENV PHANPY_DEFAULT_INSTANCE_REGISTRATION_URL=https://hachyderm.io/auth/sign_up
-ENV PHANPY_PRIVACY_POLICY_URL=https://hachyderm.io/privacy-policy
+ENV PHANPY_DEFAULT_INSTANCE=gts.enby.gay
 
 # Build the application
 RUN npm run build
