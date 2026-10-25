@@ -33,10 +33,12 @@ import NotificationService from './components/notification-service';
 import SearchCommand from './components/search-command';
 import Shortcuts from './components/shortcuts';
 import NotFound from './pages/404';
+import AccountCollections from './pages/account-collections';
 import AccountStatuses from './pages/account-statuses';
 import AnnualReport from './pages/annual-report';
 import Bookmarks from './pages/bookmarks';
 import Catchup from './pages/catchup';
+import Collection from './pages/collection';
 import Favourites from './pages/favourites';
 import Filters from './pages/filters';
 import FollowedHashtags from './pages/followed-hashtags';
@@ -68,6 +70,7 @@ import {
 import { getAccessToken } from './utils/auth';
 import { AuthProvider, useAuth } from './utils/auth-context';
 import focusDeck from './utils/focus-deck';
+import { initSubscription } from './utils/push-notifications';
 import states, { hideAllModals, initStates, statusKey } from './utils/states';
 import store from './utils/store';
 import {
@@ -568,6 +571,13 @@ function App() {
 
   useEffect(focusDeck, [location, isLoggedIn]);
 
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    initSubscription().catch((err) => {
+      console.warn('🔔 Failed to init subscription', err);
+    });
+  }, [isLoggedIn]);
+
   // Save last page for PWA restoration
   const restoredRef = useRef(false);
   const lastPathKey = 'pwaLastPath';
@@ -895,7 +905,11 @@ function SecondaryRoutes() {
         }
       />
       <Route path="/:instance?/t/:hashtag" element={<Hashtag />} />
-      <Route path="/:instance?/a/:id" element={<AccountStatuses />} />
+      <Route path="/:instance?/a/:id">
+        <Route index element={<AccountStatuses />} />
+        <Route path="c" element={<AccountCollections />} />
+      </Route>
+      <Route path="/:instance?/c/:id" element={<Collection />} />
       <Route path="/:instance?/p">
         <Route index element={<Public />} />
         <Route path="l" element={<Public local />} />

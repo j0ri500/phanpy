@@ -22,7 +22,7 @@ import { useLongPress } from 'use-long-press';
 import { useSnapshot } from 'valtio';
 
 import { api, getPreferences } from '../utils/api';
-import { langDetector } from '../utils/browser-translator';
+import { getLangDetector } from '../utils/browser-translator';
 import { useEditHistory } from '../utils/edit-history-context';
 import FilterContext from '../utils/filter-context';
 import { isFiltered } from '../utils/filters';
@@ -42,6 +42,7 @@ import {
 } from '../utils/quote-utils';
 import RTF from '../utils/relative-time-format';
 import safeBoundingBoxPadding from '../utils/safe-bounding-box-padding';
+import setRef from '../utils/set-ref';
 import shortenNumber from '../utils/shorten-number';
 import showCompose from '../utils/show-compose';
 import showToast from '../utils/show-toast';
@@ -89,6 +90,7 @@ import TranslationBlock from './translation-block';
 
 const SHOW_COMMENT_COUNT_LIMIT = 280;
 const INLINE_TRANSLATE_LIMIT = 140;
+const MAX_COLLECTIONS = 4;
 
 const accountQueue = new PQueue({
   concurrency: 1,
@@ -228,6 +230,7 @@ const detectLang = pmem(async (text) => {
     return null;
   }
 
+  const langDetector = await getLangDetector();
   if (langDetector) {
     const langs = await langDetector.detect(text);
     console.groupCollapsed(
@@ -607,7 +610,11 @@ function Status({
           onMouseEnter={debugHover}
         >
           <div class="status-pre-meta">
-            <Icon icon="group" size="l" alt={t`Group`} />{' '}
+            <Icon
+              icon="group"
+              size="l"
+              alt={t({ message: 'Group', context: 'account type' })}
+            />{' '}
             <NameText account={status.account} instance={instance} showAvatar />
           </div>
           <Status
@@ -2066,10 +2073,18 @@ function Status({
       ? forceShowQuoteCount(quotesCount)
       : forceShowQuoteCount && quotesCount > 0;
 
-  const _taggedCollections = taggedCollections;
-  const collectionForCard = _taggedCollections?.find((c) => {
-    return isSameURL(c.url, card?.url);
-  });
+  const collectionsWithCard = useMemo(() => {
+    const tc = taggedCollections ?? [];
+    const cardUrl = card?.url;
+    const matchIndex = tc.findIndex((c) => isSameURL(c.url, cardUrl));
+
+    if (matchIndex === -1) return [];
+
+    const matched = tc[matchIndex];
+    const others = tc.filter((_, i) => i !== matchIndex);
+
+    return [matched, ...others].slice(0, MAX_COLLECTIONS);
+  }, [taggedCollections, card?.url]);
 
   return (
     <StatusParent>
@@ -2088,19 +2103,19 @@ function Status({
             node?.closest?.(
               '.timeline-item, .timeline-item-alt, .status-link, .status-focus',
             ) || node;
-          rRef.current = nodeRef;
-          fRef.current = nodeRef;
-          dRef.current = nodeRef;
-          bRef.current = nodeRef;
-          xRef.current = nodeRef;
-          qRef.current = nodeRef;
+          setRef(rRef, nodeRef);
+          setRef(fRef, nodeRef);
+          setRef(dRef, nodeRef);
+          setRef(bRef, nodeRef);
+          setRef(xRef, nodeRef);
+          setRef(qRef, nodeRef);
         }}
         tabindex="-1"
         class={`status ${
           !withinContext && inReplyToId && inReplyToAccount
             ? 'status-reply-to'
             : ''
-        } visibility-${visibility} ${_pinned ? 'status-pinned' : ''} ${
+        } ${quote ? 'status-quote' : ''} visibility-${visibility} ${_pinned ? 'status-pinned' : ''} ${
           SIZE_CLASS[size]
         } ${_deleted ? 'status-deleted' : ''} ${quoted ? 'status-card' : ''} ${
           isContextMenuOpen ? 'status-menu-open' : ''
@@ -2255,7 +2270,7 @@ function Status({
             href={accountURL}
             tabindex="-1"
             // target="_blank"
-            title={`@${acct}`}
+            title={`@${punycode.toUnicode(acct)}`}
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -2767,16 +2782,22 @@ function Status({
                 {!poll &&
                   !mediaAttachments.length &&
                   !snapStates.statusQuotes[sKey] &&
-                  (collectionForCard ? (
-                    <CollectionCard
-                      collection={collectionForCard}
-                      instance={currentInstance}
-                      creatorAccount={
-                        collectionForCard.accountId === accountId
-                          ? status.account
-                          : undefined
-                      }
-                    />
+                  (collectionsWithCard.length ? (
+                    <div class="collections-container">
+                      {collectionsWithCard.map((collection) => (
+                        <CollectionCard
+                          key={collection.id}
+                          collection={collection}
+                          instance={currentInstance}
+                          creatorAccount={
+                            collection.accountId === accountId
+                              ? status.account
+                              : undefined
+                          }
+                          size={size}
+                        />
+                      ))}
+                    </div>
                   ) : !!card && /^https/i.test(card?.url) ? (
                     <StatusCard
                       card={card}
@@ -2788,16 +2809,23 @@ function Status({
                       )}
                       instance={currentInstance}
                     />
-                  ) : _taggedCollections?.length ? (
-                    <CollectionCard
-                      collection={_taggedCollections[0]}
-                      instance={currentInstance}
-                      creatorAccount={
-                        _taggedCollections[0].accountId === accountId
-                          ? status.account
-                          : undefined
-                      }
-                    />
+                  ) : taggedCollections?.length ? (
+                    <div class="collections-container">
+                      {/* Limit to 4, for now. */}
+                      {taggedCollections.slice(0, 4).map((collection) => (
+                        <CollectionCard
+                          key={collection.id}
+                          collection={collection}
+                          instance={currentInstance}
+                          creatorAccount={
+                            collection.accountId === accountId
+                              ? status.account
+                              : undefined
+                          }
+                          size={size}
+                        />
+                      ))}
+                    </div>
                   ) : null)}
                 {size !== 's' && <StatusTags tags={tags} content={content} />}
               </>

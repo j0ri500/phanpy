@@ -5,6 +5,7 @@ import { Trans, useLingui } from '@lingui/react/macro';
 import { MenuDivider, MenuItem } from '@szhsin/react-menu';
 import { deepEqual } from 'fast-equals';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import punycode from 'punycode/';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { uid } from 'uid/single';
 import { useSnapshot } from 'valtio';
@@ -213,6 +214,8 @@ function Compose({
 
   const textareaRef = useRef();
   const spoilerTextRef = useRef();
+  const filePickerInputRef = useRef(null);
+  const cameraCaptureInputRef = useRef(null);
 
   const [visibility, setVisibility] = useState('public');
   const [quoteApprovalPolicy, setQuoteApprovalPolicy] = useState('public');
@@ -315,13 +318,11 @@ function Compose({
   };
 
   const handlePastedLink = async (url) => {
+    // Clear stale quote suggestion (e.g. when the new paste fails to unfurl)
+    setQuoteSuggestion(null);
+
     // Handle QP links
     if (supportsNativeQuote()) {
-      // Quotes cannot coexist with media attachments or polls
-      if (mediaAttachments.length > 0 || poll) {
-        return;
-      }
-
       // Cannot add/remove/replace current quote when editing
       if (editStatus) {
         return;
@@ -407,7 +408,7 @@ function Compose({
   const lastFocusedEmojiFieldRef = useRef(null);
   const focusLastFocusedField = () => {
     setTimeout(() => {
-      if (!lastFocusedFieldRef.current) return;
+      if (!lastFocusedFieldRef.current?.isConnected) return;
       lastFocusedFieldRef.current.focus();
     }, 0);
   };
@@ -415,17 +416,18 @@ function Compose({
   useEffect(() => {
     const handleFocus = (e) => {
       // Toggle focused if in or out if any fields are focused
-      composeContainerRef.current.classList.toggle(
-        'focused',
-        e.type === 'focusin',
-      );
+      // Prefer e.currentTarget over composeContainerRef.current because
+      // the ref may already be nulled during unmount when focusout fires.
+      // Keep the ref as fallback in case the event is ever retargeted.
+      const container = e.currentTarget ?? composeContainerRef.current;
+      container?.classList.toggle('focused', e.type === 'focusin');
 
       const target = e.target;
-      if (target.hasAttribute('data-allow-custom-emoji')) {
+      if (target?.hasAttribute?.('data-allow-custom-emoji')) {
         lastFocusedEmojiFieldRef.current = target;
       }
       const isFormElement = ['INPUT', 'BUTTON', 'SELECT', 'TEXTAREA'].includes(
-        target.tagName,
+        target?.tagName,
       );
       if (isFormElement) {
         lastFocusedFieldRef.current = target;
@@ -843,8 +845,24 @@ function Compose({
           }
         : null,
     };
+    // Compare drafts by metadata only, without the heavy fileData/file bytes.
+    // When fileData is present, url is a local object URL — exclude it to
+    // avoid false inequality from unique-per-call blob URLs.
+    const backgroundDraftLight = {
+      ...backgroundDraft,
+      draftStatus: {
+        ...backgroundDraft.draftStatus,
+        mediaAttachments: backgroundDraft.draftStatus.mediaAttachments?.map(
+          (attachment) => {
+            const { fileData, file, ...metadata } = attachment;
+            if (fileData) delete metadata.url;
+            return metadata;
+          },
+        ),
+      },
+    };
     if (
-      !deepEqual(backgroundDraft, prevBackgroundDraft.current) &&
+      !deepEqual(backgroundDraftLight, prevBackgroundDraft.current) &&
       !canClose()
     ) {
       console.debug('not equal', backgroundDraft, prevBackgroundDraft.current);
@@ -860,7 +878,7 @@ function Compose({
         .catch((e) => {
           console.error('DRAFT failed', key, e);
         });
-      prevBackgroundDraft.current = structuredClone(backgroundDraft);
+      prevBackgroundDraft.current = structuredClone(backgroundDraftLight);
     }
   };
   useInterval(saveUnsavedDraft, 5000); // background save every 5s
@@ -969,8 +987,8 @@ function Compose({
   const mediaButtonDisabled =
     uiState === 'loading' ||
     (maxMediaAttachments !== undefined &&
-      mediaAttachments.length >= maxMediaAttachments) ||
-    !!poll; /* ||
+      mediaAttachments.length >= maxMediaAttachments); /* ||
+    !!poll ||
     !!currentQuoteStatus?.id; */
 
   const cwButtonDisabled = uiState === 'loading' || !!sensitive;
@@ -983,8 +1001,8 @@ function Compose({
 
   // If maxOptions is not defined or defined and is greater than 1, show poll button
   const showPollButton = maxOptions == null || maxOptions > 1;
-  const pollButtonDisabled =
-    uiState === 'loading' || !!poll || !!mediaAttachments.length; /* ||
+  const pollButtonDisabled = uiState === 'loading' || !!poll; /* ||
+    !!mediaAttachments.length ||
     !!currentQuoteStatus?.id; */
   const onPollButtonClick = () => {
     setPoll({
@@ -1016,13 +1034,15 @@ function Compose({
   useThrottledResizeObserver({
     ref: addSubToolbarRef,
     box: 'border-box',
-    onResize: ({ width }) => {
+    onResize: ({ width } = {}) => {
       // If scrollable, it's truncated
-      const { scrollWidth } = addSubToolbarRef.current;
+      const el = addSubToolbarRef.current;
+      if (!el) return;
+      const { scrollWidth } = el;
       const truncated = scrollWidth > width;
       const overTruncated = width < BUTTON_WIDTH * 4;
       setShowAddButton(overTruncated || truncated);
-      addSubToolbarRef.current.hidden = overTruncated;
+      el.hidden = overTruncated;
     },
   });
 
@@ -1218,7 +1238,9 @@ function Compose({
               {replyToStatusMonthsAgo > 0 ? (
                 <Trans>
                   Replying to @
-                  {replyToStatus.account.acct || replyToStatus.account.username}
+                  {replyToStatus.account.acct
+                    ? punycode.toUnicode(replyToStatus.account.acct)
+                    : replyToStatus.account.username}
                   &rsquo;s post (
                   <strong>
                     {rtf.format(-replyToStatusMonthsAgo, 'month')}
@@ -1228,7 +1250,9 @@ function Compose({
               ) : (
                 <Trans>
                   Replying to @
-                  {replyToStatus.account.acct || replyToStatus.account.username}
+                  {replyToStatus.account.acct
+                    ? punycode.toUnicode(replyToStatus.account.acct)
+                    : replyToStatus.account.username}
                   &rsquo;s post
                 </Trans>
               )}
@@ -1737,6 +1761,22 @@ function Compose({
             onCancel={() => setQuoteSuggestion(null)}
           />
           <div class="toolbar compose-footer">
+            {supportsCameraCapture && (
+              <CameraCaptureInput
+                ref={cameraCaptureInputRef}
+                supportedMimeTypes={supportedImagesVideosTypes}
+                disabled={mediaButtonDisabled}
+                setMediaAttachments={setMediaAttachments}
+              />
+            )}
+            <FilePickerInput
+              ref={filePickerInputRef}
+              supportedMimeTypes={supportedMimeTypes}
+              maxMediaAttachments={maxMediaAttachments}
+              mediaAttachments={mediaAttachments}
+              disabled={mediaButtonDisabled}
+              setMediaAttachments={setMediaAttachments}
+            />
             <span class="add-toolbar-button-group spacer">
               {showAddButton && (
                 <Menu2
@@ -1762,33 +1802,19 @@ function Compose({
                   {supportsCameraCapture && (
                     <MenuItem
                       disabled={mediaButtonDisabled}
-                      className="compose-menu-add-media"
+                      onClick={() => {
+                        cameraCaptureInputRef.current?.click();
+                      }}
                     >
-                      <label class="compose-menu-add-media-field">
-                        <CameraCaptureInput
-                          hidden
-                          supportedMimeTypes={supportedImagesVideosTypes}
-                          disabled={mediaButtonDisabled}
-                          setMediaAttachments={setMediaAttachments}
-                        />
-                      </label>
                       <Icon icon="camera" /> <span>{_(ADD_LABELS.camera)}</span>
                     </MenuItem>
                   )}
                   <MenuItem
                     disabled={mediaButtonDisabled}
-                    className="compose-menu-add-media"
+                    onClick={() => {
+                      filePickerInputRef.current?.click();
+                    }}
                   >
-                    <label class="compose-menu-add-media-field">
-                      <FilePickerInput
-                        hidden
-                        supportedMimeTypes={supportedMimeTypes}
-                        maxMediaAttachments={maxMediaAttachments}
-                        mediaAttachments={mediaAttachments}
-                        disabled={mediaButtonDisabled}
-                        setMediaAttachments={setMediaAttachments}
-                      />
-                    </label>
                     <Icon icon="media" /> <span>{_(ADD_LABELS.media)}</span>
                   </MenuItem>
                   <MenuItem
@@ -1847,26 +1873,25 @@ function Compose({
                 hidden
               >
                 {supportsCameraCapture && (
-                  <label class="toolbar-button">
-                    <CameraCaptureInput
-                      supportedMimeTypes={supportedImagesVideosTypes}
-                      mediaAttachments={mediaAttachments}
-                      disabled={mediaButtonDisabled}
-                      setMediaAttachments={setMediaAttachments}
-                    />
-                    <Icon icon="camera" alt={_(ADD_LABELS.camera)} />
-                  </label>
-                )}
-                <label class="toolbar-button">
-                  <FilePickerInput
-                    supportedMimeTypes={supportedMimeTypes}
-                    maxMediaAttachments={maxMediaAttachments}
-                    mediaAttachments={mediaAttachments}
+                  <button
+                    type="button"
+                    class="toolbar-button"
                     disabled={mediaButtonDisabled}
-                    setMediaAttachments={setMediaAttachments}
-                  />
+                    onClick={() => cameraCaptureInputRef.current?.click()}
+                    title={_(ADD_LABELS.camera)}
+                  >
+                    <Icon icon="camera" alt={_(ADD_LABELS.camera)} />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  class="toolbar-button"
+                  disabled={mediaButtonDisabled}
+                  onClick={() => filePickerInputRef.current?.click()}
+                  title={t`Add media`}
+                >
                   <Icon icon="media" alt={_(ADD_LABELS.media)} />
-                </label>
+                </button>
                 <button
                   type="button"
                   class="toolbar-button"

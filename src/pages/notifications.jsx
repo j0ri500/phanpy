@@ -38,6 +38,7 @@ import haptics from '../utils/haptics';
 import mem from '../utils/mem';
 import niceDateTime from '../utils/nice-date-time';
 import { getRegistration } from '../utils/push-notifications';
+import setRef from '../utils/set-ref';
 import shortenNumber from '../utils/shorten-number';
 import showToast from '../utils/show-toast';
 import states, { saveStatus } from '../utils/states';
@@ -52,6 +53,25 @@ const NOTIFICATIONS_LIMIT = 80;
 const NOTIFICATIONS_GROUPED_LIMIT = 20;
 const emptySearchParams = new URLSearchParams();
 
+const SUPPORTED_NOTIFICATION_TYPES = [
+  'mention',
+  'status',
+  'reblog',
+  'follow',
+  'follow_request',
+  'favourite',
+  'poll',
+  'update',
+  'admin.sign_up',
+  'admin.report',
+  'severed_relationships',
+  'moderation_warning',
+  'quote',
+  'quoted_update',
+  'added_to_collection',
+  'collection_update',
+];
+
 const scrollIntoViewOptions = {
   block: 'start',
   inline: 'center',
@@ -65,17 +85,29 @@ const memSupportsGroupedNotifications = mem(
   },
 );
 
+const memSupportsFallbackNotifications = mem(
+  () => getAPIVersions()?.mastodon >= 10,
+  {
+    expires: 1000 * 60 * 5, // 5 minutes
+  },
+);
+
 function mastoFetchNotificationsIterable(opts = {}) {
   const { masto } = api();
+  const supportedTypes = memSupportsFallbackNotifications()
+    ? SUPPORTED_NOTIFICATION_TYPES
+    : undefined;
   if (memSupportsGroupedNotifications()) {
     // https://github.com/mastodon/mastodon/pull/29889
     return masto.v2.notifications.list({
       limit: NOTIFICATIONS_GROUPED_LIMIT,
+      supportedTypes,
       ...opts,
     });
   } else {
     return masto.v1.notifications.list({
       limit: NOTIFICATIONS_LIMIT,
+      supportedTypes,
       ...opts,
     });
   }
@@ -98,13 +130,15 @@ const NOTIFICATIONS_POLICIES = [
   'forNewAccounts',
   'forPrivateMentions',
   'forLimitedAccounts',
+  'forBots',
 ];
 const NOTIFICATIONS_POLICIES_TEXT = {
-  forNotFollowing: msg`You don't follow`,
-  forNotFollowers: msg`Who don't follow you`,
-  forNewAccounts: msg`With a new account`,
-  forPrivateMentions: msg`Who unsolicitedly private mention you`,
-  forLimitedAccounts: msg`Who are limited by server moderators`,
+  forNotFollowing: msg`People you don't follow`,
+  forNotFollowers: msg`People not following you`,
+  forNewAccounts: msg`New accounts`,
+  forPrivateMentions: msg`Unsolicited private mentions`,
+  forLimitedAccounts: msg`Moderated accounts`,
+  forBots: msg`Bot accounts`,
 };
 
 function Notifications({ columnMode }) {
@@ -250,6 +284,7 @@ function Notifications({ columnMode }) {
   const supportsFilteredNotifications = supports(
     '@mastodon/filtered-notifications',
   );
+  const supportsBotFilter = supports('@mastodon/notification-bot-filter');
   const [showNotificationsSettings, setShowNotificationsSettings] =
     useState(false);
   const [notificationsPolicy, setNotificationsPolicy] = useState({});
@@ -660,8 +695,10 @@ function Notifications({ columnMode }) {
     },
     {
       useKey: true,
+      ignoreModifiers: true,
       ignoreEventWhen: (e) => {
         // Allow '.' even with Shift (some keyboard layouts require Shift for '.')
+        // NOTE: ignoreModifiers:true required so lib doesn't reject Shift+. first.
         if (e.key === '.') return false;
         return e.metaKey || e.ctrlKey || e.altKey || e.shiftKey;
       },
@@ -683,10 +720,10 @@ function Notifications({ columnMode }) {
       class="deck-container"
       ref={(node) => {
         scrollableRef.current = node;
-        jRef.current = node;
-        kRef.current = node;
-        oRef.current = node;
-        dotRef.current = node;
+        setRef(jRef, node);
+        setRef(kRef, node);
+        setRef(oRef, node);
+        setRef(dotRef, node);
       }}
       tabIndex="-1"
     >
@@ -966,7 +1003,11 @@ function Notifications({ columnMode }) {
               // This is leaked from Notifications popover
               .filter((n) => n.type !== 'follow_request')
               .map((notification) => {
-                if (onlyMentions && notification.type !== 'mention') {
+                if (
+                  onlyMentions &&
+                  notification.type !== 'mention' &&
+                  notification.type !== 'quote'
+                ) {
                   return null;
                 }
                 const notificationDay = new Date(notification.createdAt);
@@ -1032,7 +1073,7 @@ function Notifications({ columnMode }) {
                 <br />
                 <br />
                 <button type="button" onClick={() => loadNotifications(true)}>
-                  <Trans>Try again</Trans>
+                  <Trans comment="Infinitive form">Try again</Trans>
                 </button>
               </p>
             )}
@@ -1093,6 +1134,7 @@ function Notifications({ columnMode }) {
                     forNewAccounts,
                     forPrivateMentions,
                     forLimitedAccounts,
+                    forBots,
                   } = e.target;
                   const newPolicy = {
                     ...notificationsPolicy,
@@ -1102,6 +1144,9 @@ function Notifications({ columnMode }) {
                     forPrivateMentions: forPrivateMentions.value,
                     forLimitedAccounts: forLimitedAccounts.value,
                   };
+                  if (supportsBotFilter) {
+                    newPolicy.forBots = forBots?.value;
+                  }
                   setNotificationsPolicy(newPolicy);
                   setShowNotificationsSettings(false);
                   (async () => {
@@ -1115,10 +1160,12 @@ function Notifications({ columnMode }) {
                 }}
               >
                 <p>
-                  <Trans>Filter out notifications from people:</Trans>
+                  <Trans>Filter notifications from:</Trans>
                 </p>
                 <div class="notification-policy-fields">
-                  {NOTIFICATIONS_POLICIES.map((key) => {
+                  {NOTIFICATIONS_POLICIES.filter(
+                    (key) => key !== 'forBots' || supportsBotFilter,
+                  ).map((key) => {
                     const value = notificationsPolicy[key];
                     return (
                       <div key={key}>

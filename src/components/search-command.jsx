@@ -39,21 +39,26 @@ export default memo(function SearchCommand({ onClose = () => {} }) {
     },
     {
       useKey: true,
+      ignoreModifiers: true,
       preventDefault: true,
       ignoreEventWhen: (e) => {
         const isSearchPage = /\/search/.test(location.hash);
         const isYearInPostsPage = /\/yip/.test(location.hash);
         const hasModal = !!document.querySelector('#modal-container > *');
-        // Allow '/' even with Shift (e.g. German keyboards)
-        if (e.key === '/') return false;
+        // Match by '/' character, not by key code: the code 'Slash' also
+        // fires for '?', and '/' needs Shift on some layouts
+        // (e.g. German Shift+7, French Shift+:).
+        // NOTE: ignoreModifiers:true is required so the library itself
+        // doesn't reject Shift+/ before ignoreEventWhen runs.
+        const isSlashKey = e.key === '/';
         return (
+          !isSlashKey ||
           isSearchPage ||
           isYearInPostsPage ||
           hasModal ||
           e.metaKey ||
           e.ctrlKey ||
-          e.altKey ||
-          e.shiftKey
+          e.altKey
         );
       },
     },

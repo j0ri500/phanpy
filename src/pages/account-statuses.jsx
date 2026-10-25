@@ -177,12 +177,10 @@ function AccountStatuses({ columnMode, ...props }) {
         beforeStr,
       });
 
-      let limit;
+      let limit = LIMIT + 1;
       if (firstLoad) {
-        limit = LIMIT + 1;
         searchOffsetRef.current = 0;
       } else {
-        limit = LIMIT + searchOffsetRef.current + 1;
         searchOffsetRef.current += LIMIT;
       }
 
@@ -284,9 +282,11 @@ function AccountStatuses({ columnMode, ...props }) {
 
   const [featuredTags, setFeaturedTags] = useState([]);
 
+  const unicodeAcct = account?.acct ? punycode.toUnicode(account.acct) : '';
+
   let title = t`Account posts`;
   if (account?.acct) {
-    const acctDisplay = (/@/.test(account.acct) ? '' : '@') + account.acct;
+    const acctDisplay = (/^@/.test(account.acct) ? '' : '@') + unicodeAcct;
     const accountDisplay = account?.displayName
       ? `${account.displayName} (${acctDisplay})`
       : acctDisplay;
@@ -625,7 +625,7 @@ function AccountStatuses({ columnMode, ...props }) {
     <>
       <Timeline
         key={id}
-        title={`${account?.acct ? '@' + account.acct : t`Posts`}`}
+        title={`${account?.acct ? '@' + unicodeAcct : t`Posts`}`}
         titleComponent={
           <h1
             class="header-double-lines header-account"
@@ -644,7 +644,7 @@ function AccountStatuses({ columnMode, ...props }) {
               />
             </b>
             <div>
-              <span class="bidi-isolate">@{acct}</span>
+              <span class="bidi-isolate">@{unicodeAcct}</span>
             </div>
           </h1>
         }
@@ -851,10 +851,10 @@ function MonthPicker(props) {
   );
 }
 
-function fetchAccount(id, masto) {
+export function fetchAccount(id, masto) {
   return masto.v1.accounts.$select(id).fetch();
 }
-const memFetchAccount = pmem(fetchAccount, {
+export const memFetchAccount = pmem(fetchAccount, {
   expires: 30 * 60 * 1000, // 30 minutes
 });
 
